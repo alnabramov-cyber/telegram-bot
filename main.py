@@ -2,11 +2,7 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -18,9 +14,9 @@ from telegram.ext import (
 )
 
 # ===== ENV =====
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
-PORT = int(os.environ.get("PORT", "10000"))
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "0").strip() or "0")
+PORT = int(os.environ.get("PORT", "10000").strip() or "10000")
 
 # ===== TEXTS =====
 QUESTION_TEXT = (
@@ -32,14 +28,11 @@ QUESTION_TEXT = (
 
 AFTER_OK_TEXT = (
     "Привет, Полина)\n\n"
-    "Я хочу тебя касаться, доставлять тебе удовольствие и заняться с тобой сексом. "
-    "Это прекрасно, не так ли?) Чтобы это произошло выбери один из вариантов."
+    "Я очень рад) Чтобы продолжить — выбери один из вариантов."
+    # <- если хочешь, вставь сюда свой оригинальный текст
 )
 
-AFTER_RANDOM_TEXT = (
-    "Ты явно нажала случайно, поэтому выбери заново."
-)
-
+AFTER_RANDOM_TEXT = "Ты явно нажала случайно, поэтому выбери заново."
 AFTER_YES_TEXT = "Прекрасно, я очень рад)\nВыбери день:"
 
 FINAL_TEXT = (
@@ -60,28 +53,36 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"ok")
 
+
 def run_http():
     HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
+
 # ===== KEYBOARDS =====
 def choice_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Я тоже этого хочу", callback_data="choice:yes")],
-        [InlineKeyboardButton("Теоретическая кнопка", callback_data="choice:random")],
-    ])
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Я тоже этого хочу", callback_data="choice:yes")],
+            [InlineKeyboardButton("Теоретическая кнопка", callback_data="choice:random")],
+        ]
+    )
+
 
 def day_keyboard():
-    return InlineKeyboardMarkup([
+    return InlineKeyboardMarkup(
         [
-            InlineKeyboardButton("Сегодня", callback_data="day:today"),
-            InlineKeyboardButton("Чт", callback_data="day:thu"),
-            InlineKeyboardButton("Пт", callback_data="day:fri"),
-        ],
-        [
-            InlineKeyboardButton("Сб", callback_data="day:sat"),
-            InlineKeyboardButton("Вс", callback_data="day:sun"),
-        ],
-    ])
+            [
+                InlineKeyboardButton("Сегодня", callback_data="day:today"),
+                InlineKeyboardButton("Чт", callback_data="day:thu"),
+                InlineKeyboardButton("Пт", callback_data="day:fri"),
+            ],
+            [
+                InlineKeyboardButton("Сб", callback_data="day:sat"),
+                InlineKeyboardButton("Вс", callback_data="day:sun"),
+            ],
+        ]
+    )
+
 
 def time_keyboard(day: str):
     slots = {
@@ -96,6 +97,7 @@ def time_keyboard(day: str):
     buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="back:days")])
     return InlineKeyboardMarkup(buttons)
 
+
 # ===== HANDLERS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
@@ -103,9 +105,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(QUESTION_TEXT)
     return WAIT_ANSWER
 
+
 async def answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip().lower()
-    context.user_data["tries"] += 1
+    text = (update.message.text or "").strip().lower()
+    context.user_data["tries"] = int(context.user_data.get("tries", 0)) + 1
 
     if text in ACCEPTED_ANSWERS:
         await update.message.reply_text(AFTER_OK_TEXT, reply_markup=choice_keyboard())
@@ -117,6 +120,7 @@ async def answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("Неверно. Попробуй еще раз:")
     return WAIT_ANSWER
+
 
 async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -132,6 +136,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return CHOICE
 
+
 async def on_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -139,11 +144,9 @@ async def on_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _, day = q.data.split(":")
     context.user_data["day"] = day
 
-    await q.edit_message_text(
-        "Выбери время:",
-        reply_markup=time_keyboard(day)
-    )
+    await q.edit_message_text("Выбери время:", reply_markup=time_keyboard(day))
     return PICK_TIME
+
 
 async def on_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -174,6 +177,12 @@ async def on_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
+
+# ===== IMPORTANT: remove webhook on startup =====
+async def post_init(app: Application):
+    await app.bot.delete_webhook(drop_pending_updates=True)
+
+
 # ===== MAIN =====
 def main():
     if not BOT_TOKEN:
@@ -181,7 +190,7 @@ def main():
 
     threading.Thread(target=run_http, daemon=True).start()
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -195,7 +204,9 @@ def main():
     )
 
     app.add_handler(conv)
-    app.run_polling(close_loop=False)
+
+    app.run_polling(drop_pending_updates=True)
+
 
 if __name__ == "__main__":
     main()
