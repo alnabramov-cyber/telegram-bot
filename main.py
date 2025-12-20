@@ -2,26 +2,22 @@ import os
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
     ContextTypes,
+    ConversationHandler,
     filters,
 )
 
 # ===== ENV =====
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
-ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "").strip()
-ADMIN_CHAT_ID_INT = int(ADMIN_CHAT_ID) if ADMIN_CHAT_ID.isdigit() else None
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "0").strip() or "0")
 
-# ===== TIME =====
+# ===== TIMEZONE / DATES =====
 TZ = ZoneInfo("Europe/Minsk")  # GMT+3
 WD_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 
@@ -35,184 +31,195 @@ SLOTS_BY_WD = {
     5: ["После 13:00"],    # сб
     6: ["После 13:00"],    # вс
 }
-TODAY_SLOTS = ["После концерта"]  # слоты именно "сегодня"
-
-# Слоты по конкретной дате (YYYY-MM-DD). Имеют приоритет над SLOTS_BY_WD.
 SLOTS_BY_DATE = {
-    "2025-12-21": ["любое время"],  # вс
-    "2025-12-24": ["После 20:00"],  # ср
-    "2025-12-25": ["После 15:00"],  # чт
-    "2025-12-26": ["После 15:00"],  # пт
+    "2025-12-21": ["После 16:00 и до 23:00"],  # воскресенье
+    "2025-12-24": ["После 20:00"],             # среда
+    "2025-12-25": ["После 15:00"],             # четверг
+    "2025-12-26": ["После 15:00"],             # пятница
 }
-
+TODAY_SLOTS = ["После концерта"]  # слоты именно "сегодня"
 
 # ===== TEXTS =====
 QUESTION_TEXT = (
     "Привет! Раз ты здесь, значит ты посмеялась или улыбнулась, "
     "но чтобы убедиться, что ты попала сюда не просто так, ответь на вопрос:\n\n"
     "как зовут собаку, которая сначала молчит и кажется милой, "
-    "а потом начинает тяфкать и превращает жизнь в ад?"
+    "а потом начинает тянуть как танк?"
 )
-
-WRONG_ANSWER_TEXT = "Неа) Попробуй еще раз 🐶"
 
 AFTER_OK_TEXT = (
     "Привет, Полина)\n\n"
-    "Ты — прекрасна, не так ли?) Чтобы это произошло, выбери один из вариантов ниже:"
+    "Я хочу тебя касаться, доставлять тебе удовольствие и заняться с тобой сексом. "
+    "Это прекрасно, не так ли?) Чтобы это произошло, выбери один из вариантов ниже:"
 )
 
-BUTTON_1_TEXT = "Давай, поугараем"
-BUTTON_2_TEXT = "Я просто так сюда зашла"
+AFTER_RANDOM_TEXT = "Ты явно нажала случайно, поэтому выбери заново."
+AFTER_YES_TEXT = "Прекрасно, я очень рад)\nВыбери день:"
 
-AFTER_RANDOM_TEXT = (
-    "Ну что ж)\n\n"
-    "Чтобы мы могли вместе посмеяться и поугарать, выбери удобный день и время:"
+YANDEX_MAPS_URL = "https://yandex.ru/maps?text=53.918795,27.588825&si=f8fwk7wvw7hmh0cac49347aqmw"
+
+FINAL_TEXT = (
+    "Чудесно, жду тебя в это время по адресу:\n"
+    "Дорошевича 4, подъезд 3, этаж 3, квартира 49.\n\n"
+    f"Яндекс Карты: {YANDEX_MAPS_URL}"
 )
 
-AFTER_RANDOM_NO_SLOTS_TEXT = "Админ ещё не задал доступное время"
+ACCEPTED_ANSWERS = {"пуф", "пуфф"}
+MAX_TRIES = 2
 
-ADMIN_NOTIFY_TEXT = (
-    "Новая заявка!\n\n"
-    "Пользователь: {user}\n"
-    "День: {day}\n"
-    "Время: {time}\n"
-)
+# ===== STATES =====
+WAIT_ANSWER, CHOICE, PICK_DAY, PICK_TIME = range(4)
 
-CONFIRM_TEXT = (
-    "Записал ✅\n\n"
-    "Если хочешь выбрать другое время — нажми /start"
-)
+# ===== KEYBOARDS =====
+def choice_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Я тоже этого хочу", callback_data="choice:yes")],
+        [InlineKeyboardButton("Теоретическая кнопка", callback_data="choice:random")],
+    ])
 
-# ===== HELPERS =====
-def now_dt() -> datetime:
-    return datetime.now(TZ)
+def day_keyboard():
+    today = datetime.now(TZ).date()
+    buttons = []
+    row = []
 
-def today_date() -> date:
-    return now_dt().date()
-
-def fmt_day(d: date) -> str:
-    return f"{WD_RU[d.weekday()]} {d.day:02d}.{d.month:02d}"
-
-def build_main_keyboard() -> InlineKeyboardMarkup:
-    buttons = [
-        [InlineKeyboardButton(BUTTON_1_TEXT, callback_data="action:random")],
-        [InlineKeyboardButton(BUTTON_2_TEXT, callback_data="action:just")],
-    ]
-    return InlineKeyboardMarkup(buttons)
-
-def build_days_keyboard() -> InlineKeyboardMarkup:
-    today = today_date()
-    rows = []
-
-    for i in range(14):  # показываем максимум 14 дней вперед
+    # показываем ближайшие 14 дней; прошедшие не попадут
+    for i in range(14):
         d = today + timedelta(days=i)
         wd = d.weekday()
 
-        slots = TODAY_SLOTS if d == today else (SLOTS_BY_DATE.get(d.isoformat()) or SLOTS_BY_WD.get(wd, []))
+        slots = TODAY_SLOTS if d == today else SLOTS_BY_WD.get(wd, [])
         if not slots:
             continue  # если слотов нет — день не показываем
 
-        rows.append([InlineKeyboardButton(fmt_day(d), callback_data=f"day:{d.isoformat()}")])
+        label = f"{d:%d.%m} {WD_RU[wd]}"     # 16.12 вт
+        cb = f"day:{d.isoformat()}"          # day:2025-12-16
 
-    if not rows:
-        rows = [[InlineKeyboardButton(AFTER_RANDOM_NO_SLOTS_TEXT, callback_data="noop")]]
+        row.append(InlineKeyboardButton(label, callback_data=cb))
+        if len(row) == 3:
+            buttons.append(row)
+            row = []
 
-    rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="back:main")])
-    return InlineKeyboardMarkup(rows)
+    if row:
+        buttons.append(row)
 
-def build_times_keyboard(date_iso: str) -> InlineKeyboardMarkup:
-    today = today_date()
+    return InlineKeyboardMarkup(buttons)
 
-    try:
-        d = datetime.strptime(date_iso, "%Y-%m-%d").date()
-    except ValueError:
+def time_keyboard(date_iso: str):
+    today = datetime.now(TZ).date()
+    d = date.fromisoformat(date_iso)
+
+    if d < today:
         return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="back:days")]])
 
     wd = d.weekday()
-    slots = TODAY_SLOTS if d == today else (SLOTS_BY_DATE.get(d.isoformat()) or SLOTS_BY_WD.get(wd, []))
+    slots = TODAY_SLOTS if d == today else SLOTS_BY_WD.get(wd, [])
 
     buttons = [[InlineKeyboardButton(s, callback_data=f"time:{date_iso}:{s}")] for s in slots]
     buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="back:days")])
     return InlineKeyboardMarkup(buttons)
 
-async def notify_admin(context: ContextTypes.DEFAULT_TYPE, user: str, day: str, time_str: str):
-    if not ADMIN_CHAT_ID_INT:
-        return
-    text = ADMIN_NOTIFY_TEXT.format(user=user, day=day, time=time_str)
-    await context.bot.send_message(chat_id=ADMIN_CHAT_ID_INT, text=text)
-
 # ===== HANDLERS =====
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
+    context.user_data["tries"] = 0
     await update.message.reply_text(QUESTION_TEXT)
+    return WAIT_ANSWER
 
-async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_text = (update.message.text or "").strip().lower()
-    if user_text != "тяфк":
-        await update.message.reply_text(WRONG_ANSWER_TEXT)
-        return
+async def answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (update.message.text or "").strip().lower()
+    context.user_data["tries"] = int(context.user_data.get("tries", 0)) + 1
 
-    context.user_data["ok"] = True
-    await update.message.reply_text(AFTER_OK_TEXT, reply_markup=build_main_keyboard())
+    if text in ACCEPTED_ANSWERS:
+        await update.message.reply_text(AFTER_OK_TEXT, reply_markup=choice_keyboard())
+        return CHOICE
 
-async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if context.user_data["tries"] >= MAX_TRIES:
+        await update.message.reply_text("Неверно. Доступ закрыт.")
+        return ConversationHandler.END
+
+    await update.message.reply_text("Неверно. Попробуй еще раз:")
+    return WAIT_ANSWER
+
+async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    data = q.data or ""
+    if q.data == "choice:random":
+        await q.edit_message_text(AFTER_RANDOM_TEXT, reply_markup=choice_keyboard())
+        return CHOICE
 
-    if data == "noop":
-        return
+    if q.data == "choice:yes":
+        await q.edit_message_text(AFTER_YES_TEXT, reply_markup=day_keyboard())
+        return PICK_DAY
 
-    if data == "back:main":
-        await q.edit_message_text(AFTER_OK_TEXT, reply_markup=build_main_keyboard())
-        return
+    return CHOICE
 
-    if data == "back:days":
-        await q.edit_message_text(AFTER_RANDOM_TEXT, reply_markup=build_days_keyboard())
-        return
+async def on_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
 
-    if data.startswith("action:"):
-        action = data.split(":", 1)[1]
-        if action == "random":
-            await q.edit_message_text(AFTER_RANDOM_TEXT, reply_markup=build_days_keyboard())
-        else:
-            await q.edit_message_text("Ок) Если захочешь — возвращайся и нажми /start")
-        return
+    _, date_iso = q.data.split(":", 1)
+    context.user_data["date_iso"] = date_iso
 
-    if data.startswith("day:"):
-        date_iso = data.split(":", 1)[1]
-        context.user_data["picked_day"] = date_iso
-        await q.edit_message_text("Выбери время:", reply_markup=build_times_keyboard(date_iso))
-        return
+    await q.edit_message_text("Выбери время:", reply_markup=time_keyboard(date_iso))
+    return PICK_TIME
 
-    if data.startswith("time:"):
-        _, date_iso, slot = data.split(":", 2)
-        d = datetime.strptime(date_iso, "%Y-%m-%d").date()
+async def on_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
 
+    if q.data == "back:days":
+        await q.edit_message_text(AFTER_YES_TEXT, reply_markup=day_keyboard())
+        return PICK_DAY
+
+    _, date_iso, slot = q.data.split(":", 2)
+
+    await q.edit_message_text(FINAL_TEXT, disable_web_page_preview=True)
+
+    # notify admin
+    if ADMIN_ID:
         user = q.from_user
-        user_label = user.full_name
-        if user.username:
-            user_label += f" (@{user.username})"
+        name = f"@{user.username}" if user.username else user.full_name
 
-        await notify_admin(context, user_label, fmt_day(d), slot)
-        await q.edit_message_text(CONFIRM_TEXT)
-        return
+        d = date.fromisoformat(date_iso)
+        date_label = f"{d:%d.%m} {WD_RU[d.weekday()]}"
 
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("Нажми /start чтобы начать заново.")
+        msg = (
+            "Новая заявка:\n"
+            f"Пользователь: {name}\n"
+            f"День: {date_label}\n"
+            f"Время: {slot}"
+        )
+        try:
+            await context.bot.send_message(chat_id=ADMIN_ID, text=msg)
+        except Exception:
+            pass
 
-def main() -> None:
+    return ConversationHandler.END
+
+# ===== IMPORTANT: remove webhook on startup (safe) =====
+async def post_init(app: Application):
+    await app.bot.delete_webhook(drop_pending_updates=True)
+
+# ===== MAIN =====
+def main():
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN is empty. Set it in environment variables.")
+        raise RuntimeError("BOT_TOKEN is missing")
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CallbackQueryHandler(on_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_answer))
+    conv = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            WAIT_ANSWER: [MessageHandler(filters.TEXT & ~filters.COMMAND, answer)],
+            CHOICE: [CallbackQueryHandler(on_choice)],
+            PICK_DAY: [CallbackQueryHandler(on_day)],
+            PICK_TIME: [CallbackQueryHandler(on_time)],
+        },
+        fallbacks=[CommandHandler("start", start)],
+    )
 
+    app.add_handler(conv)
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
