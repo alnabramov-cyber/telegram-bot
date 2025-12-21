@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -21,47 +21,17 @@ ADMIN_ID = int(os.environ.get("ADMIN_ID", "0").strip() or "0")
 TZ = ZoneInfo("Europe/Minsk")  # GMT+3
 WD_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 
-# Слоты по дню недели — ОТКЛЮЧЕНЫ
-SLOTS_BY_WD = {
-    0: [],
-    1: [],
-    2: [],
-    3: [],
-    4: [],
-    5: [],
-    6: [],
-}
-
-# Слоты "на сегодня" — ОТКЛЮЧЕНЫ
-TODAY_SLOTS = []
-
-# Слоты ТОЛЬКО по конкретным датам
+# ===== SLOTS BY DATE =====
 SLOTS_BY_DATE = {
-    "2025-12-21": ["После 16:00 и до 23:00"],  # воскресенье
-    "2025-12-24": ["После 19:30"],             # среда
-    "2025-12-25": ["После 16:00"],             # четверг
-    "2025-12-26": ["После 13:00"],             # пятница
-    "2025-12-27": ["После 12:00"],             # суббота
-    "2025-12-28": ["Когда ты захочешь"],       # воскресенье
+    "2025-12-21": ["После 16:00 и до 23:00"],
+    "2025-12-24": ["После 20:00"],
+    "2025-12-25": ["После 15:00"],
+    "2025-12-26": ["После 15:00"],
 }
-
 
 # ===== TEXTS =====
-QUESTION_TEXT = (
-    "Привет! Раз ты здесь, значит ты посмеялась или улыбнулась, "
-    "но чтобы убедиться, что ты попала сюда не просто так, ответь на вопрос:\n\n"
-    "как зовут собаку, которая сначала молчит и кажется милой, "
-    "а потом начинает тянуть как танк?"
-)
-
-AFTER_OK_TEXT = (
-    "Привет, Полина)\n\n"
-    "Я хочу тебя касаться, доставлять тебе удовольствие и заняться с тобой сексом. "
-    "Это прекрасно, не так ли?) Чтобы это произошло, выбери один из вариантов ниже:"
-)
-
-AFTER_RANDOM_TEXT = "Ты явно нажала случайно, поэтому выбери заново."
-AFTER_YES_TEXT = "Прекрасно, я очень рад)\nВыбери день:"
+QUESTION_TEXT = "Введи кодовое слово, пожалуйста."
+AFTER_OK_TEXT = "Привет, Полина)\nИ когда же в этот раз?"
 
 YANDEX_MAPS_URL = "https://yandex.ru/maps?text=53.918795,27.588825&si=f8fwk7wvw7hmh0cac49347aqmw"
 
@@ -75,15 +45,9 @@ ACCEPTED_ANSWERS = {"пуф", "пуфф"}
 MAX_TRIES = 2
 
 # ===== STATES =====
-WAIT_ANSWER, CHOICE, PICK_DAY, PICK_TIME = range(4)
+WAIT_ANSWER, PICK_DAY, PICK_TIME = range(3)
 
 # ===== KEYBOARDS =====
-def choice_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Я тоже этого хочу", callback_data="choice:yes")],
-        [InlineKeyboardButton("Теоретическая кнопка", callback_data="choice:random")],
-    ])
-
 def day_keyboard():
     today = datetime.now(TZ).date()
     buttons = []
@@ -92,7 +56,7 @@ def day_keyboard():
     for date_iso in sorted(SLOTS_BY_DATE.keys()):
         d = date.fromisoformat(date_iso)
         if d < today:
-            continue  # прошлое не показываем
+            continue
 
         wd = d.weekday()
         label = f"{d:%d.%m} {WD_RU[wd]}"
@@ -109,14 +73,7 @@ def day_keyboard():
     return InlineKeyboardMarkup(buttons)
 
 
-
 def time_keyboard(date_iso: str):
-    today = datetime.now(TZ).date()
-    d = date.fromisoformat(date_iso)
-
-    if d < today:
-        return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="back:days")]])
-
     slots = SLOTS_BY_DATE.get(date_iso, [])
 
     buttons = [[InlineKeyboardButton(s, callback_data=f"time:{date_iso}:{s}")] for s in slots]
@@ -131,13 +88,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(QUESTION_TEXT)
     return WAIT_ANSWER
 
+
 async def answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip().lower()
-    context.user_data["tries"] = int(context.user_data.get("tries", 0)) + 1
+    context.user_data["tries"] += 1
 
     if text in ACCEPTED_ANSWERS:
-        await update.message.reply_text(AFTER_OK_TEXT, reply_markup=choice_keyboard())
-        return CHOICE
+        await update.message.reply_text(AFTER_OK_TEXT, reply_markup=day_keyboard())
+        return PICK_DAY
 
     if context.user_data["tries"] >= MAX_TRIES:
         await update.message.reply_text("Неверно. Доступ закрыт.")
@@ -146,19 +104,6 @@ async def answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Неверно. Попробуй еще раз:")
     return WAIT_ANSWER
 
-async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    if q.data == "choice:random":
-        await q.edit_message_text(AFTER_RANDOM_TEXT, reply_markup=choice_keyboard())
-        return CHOICE
-
-    if q.data == "choice:yes":
-        await q.edit_message_text(AFTER_YES_TEXT, reply_markup=day_keyboard())
-        return PICK_DAY
-
-    return CHOICE
 
 async def on_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -170,19 +115,19 @@ async def on_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text("Выбери время:", reply_markup=time_keyboard(date_iso))
     return PICK_TIME
 
+
 async def on_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
     if q.data == "back:days":
-        await q.edit_message_text(AFTER_YES_TEXT, reply_markup=day_keyboard())
+        await q.edit_message_text(AFTER_OK_TEXT, reply_markup=day_keyboard())
         return PICK_DAY
 
     _, date_iso, slot = q.data.split(":", 2)
 
     await q.edit_message_text(FINAL_TEXT, disable_web_page_preview=True)
 
-    # notify admin
     if ADMIN_ID:
         user = q.from_user
         name = f"@{user.username}" if user.username else user.full_name
@@ -203,22 +148,18 @@ async def on_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
-# ===== IMPORTANT: remove webhook on startup (safe) =====
-async def post_init(app: Application):
-    await app.bot.delete_webhook(drop_pending_updates=True)
 
 # ===== MAIN =====
 def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN is missing")
 
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    app = Application.builder().token(BOT_TOKEN).build()
 
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
             WAIT_ANSWER: [MessageHandler(filters.TEXT & ~filters.COMMAND, answer)],
-            CHOICE: [CallbackQueryHandler(on_choice)],
             PICK_DAY: [CallbackQueryHandler(on_day)],
             PICK_TIME: [CallbackQueryHandler(on_time)],
         },
@@ -227,6 +168,7 @@ def main():
 
     app.add_handler(conv)
     app.run_polling(drop_pending_updates=True)
+
 
 if __name__ == "__main__":
     main()
