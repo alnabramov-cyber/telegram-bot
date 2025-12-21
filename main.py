@@ -116,12 +116,12 @@ def time_keyboard(date_iso: str):
     if d < today:
         return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="back:days")]])
 
-    wd = d.weekday()
-    slots = TODAY_SLOTS if d == today else SLOTS_BY_WD.get(wd, [])
+    slots = SLOTS_BY_DATE.get(date_iso, [])
 
     buttons = [[InlineKeyboardButton(s, callback_data=f"time:{date_iso}:{s}")] for s in slots]
     buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="back:days")])
     return InlineKeyboardMarkup(buttons)
+
 
 # ===== HANDLERS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
