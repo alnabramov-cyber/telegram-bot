@@ -87,17 +87,16 @@ def day_keyboard():
     buttons = []
     row = []
 
-    # показываем ближайшие 14 дней; прошедшие не попадут
     for i in range(14):
         d = today + timedelta(days=i)
-        wd = d.weekday()
 
-        slots = TODAY_SLOTS if d == today else SLOTS_BY_WD.get(wd, [])
+        slots = SLOTS_BY_DATE.get(d.isoformat(), [])
         if not slots:
-            continue  # если слотов нет — день не показываем
+            continue
 
-        label = f"{d:%d.%m} {WD_RU[wd]}"     # 16.12 вт
-        cb = f"day:{d.isoformat()}"          # day:2025-12-16
+        wd = d.weekday()
+        label = f"{d:%d.%m} {WD_RU[wd]}"
+        cb = f"day:{d.isoformat()}"
 
         row.append(InlineKeyboardButton(label, callback_data=cb))
         if len(row) == 3:
@@ -108,6 +107,7 @@ def day_keyboard():
         buttons.append(row)
 
     return InlineKeyboardMarkup(buttons)
+
 
 def time_keyboard(date_iso: str):
     today = datetime.now(TZ).date()
